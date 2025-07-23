@@ -13,6 +13,7 @@ from typing import List, Optional, Union
 
 from common import model
 from common.auth import get_key_permission
+from common.concurrency import inference_request_manager
 from common.multimodal import MultimodalEmbeddingWrapper
 from common.networking import (
     get_generator_error,
@@ -116,8 +117,11 @@ async def _stream_collector(
             mm_embeddings,
         )
         async for generation in new_generation:
-            generation["index"] = task_idx
+            if abort_event.is_set():
+                logger.info(f"Request {request_id} aborted by client event.")
+                break
 
+            generation["index"] = task_idx
             await gen_queue.put(generation)
 
             if "finish_reason" in generation:
@@ -197,11 +201,14 @@ async def stream_generate_completion(
     data: CompletionRequest, request: Request, model_path: pathlib.Path
 ):
     """Streaming generation for completions."""
-
+    session_id = request.client.host
     abort_event = asyncio.Event()
     gen_queue = asyncio.Queue()
     gen_tasks: List[asyncio.Task] = []
     disconnect_task = asyncio.create_task(request_disconnect_loop(request))
+
+    await inference_request_manager.add_request(session_id, abort_event)
+    logger.info(f"Session {session_id}: Registered new request {request.state.id}.")
 
     try:
         logger.info(f"Received streaming completion request {request.state.id}")
@@ -231,6 +238,13 @@ async def stream_generate_completion(
                     f"Completion generation {request.state.id} cancelled by user."
                 )
 
+            if abort_event.is_set():
+                logger.info(f"Session {session_id}: Aborting request {request.state.id} due to new request.")
+                # Drain the queue of any remaining items from the aborted task
+                while not gen_queue.empty():
+                    gen_queue.get_nowait()
+                break
+
             generation = await gen_queue.get()
 
             # Stream collector will push an exception to the queue if it fails
@@ -247,7 +261,6 @@ async def stream_generate_completion(
                 break
     except CancelledError:
         # Get out if the request gets disconnected
-
         if not disconnect_task.done():
             abort_event.set()
             handle_request_disconnect(
@@ -257,6 +270,10 @@ async def stream_generate_completion(
         yield get_generator_error(
             f"Completion {request.state.id} aborted. Please check the server console."
         )
+    finally:
+        # Clean up the request from the manager
+        await inference_request_manager.remove_request(session_id, abort_event)
+        logger.info(f"Session {session_id}: Cleaned up request {request.state.id}.")
 
 
 async def generate_completion(

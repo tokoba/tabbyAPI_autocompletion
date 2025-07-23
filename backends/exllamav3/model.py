@@ -716,6 +716,8 @@ class ExllamaV3Container(BaseModelContainer):
 
             # Mark that the job is running
             self.active_job_ids[request_id] = None
+            logger.info(f"Request {request_id} added to queue. Current queue size: {len(self.active_job_ids)}")
+
 
             # Yield from the internal generator
             async for generation_chunk in self.generate_gen(
@@ -728,7 +730,9 @@ class ExllamaV3Container(BaseModelContainer):
                 yield generation_chunk
         finally:
             # Clean up and remove the job from active IDs
-            del self.active_job_ids[request_id]
+            if request_id in self.active_job_ids:
+                del self.active_job_ids[request_id]
+            logger.info(f"Request {request_id} finished. Current queue size: {len(self.active_job_ids)}")
 
     def handle_finish_chunk(self, result: dict, generation: dict):
         eos_reason = result.get("eos_reason")
@@ -924,6 +928,7 @@ class ExllamaV3Container(BaseModelContainer):
             async for result in job:
                 # Abort if the event is set while streaming
                 if abort_event and abort_event.is_set():
+                    logger.info(f"Request {request_id}: Detected abort event in backend.")
                     await job.cancel()
                     break
 
