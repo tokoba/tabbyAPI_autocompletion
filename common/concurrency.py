@@ -2,6 +2,7 @@
 
 import asyncio
 from fastapi.concurrency import run_in_threadpool  # noqa
+from loguru import logger
 from typing import AsyncGenerator, Dict, Generator, Optional
 
 
