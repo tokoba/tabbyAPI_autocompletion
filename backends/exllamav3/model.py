@@ -734,7 +734,7 @@ class ExllamaV3Container(BaseModelContainer):
                 del self.active_job_ids[request_id]
             logger.info(f"Request {request_id} finished. Current queue size: {len(self.active_job_ids)}")
 
-    def handle_finish_chunk(self, result: dict, generation: dict):
+    def handle_finish_chunk(self, result: dict, request_id: str, full_text: str):
         eos_reason = result.get("eos_reason")
 
         stop_str = None
@@ -768,6 +768,7 @@ class ExllamaV3Container(BaseModelContainer):
         total_time = round(queue_time + prompt_time + gen_time, 2)
 
         finish_chunk = {
+            "request_id": request_id,
             "prompt_tokens": prompt_tokens,
             "prompt_time": round(prompt_time, 2),
             "prompt_tokens_per_sec": prompt_ts,
@@ -779,6 +780,7 @@ class ExllamaV3Container(BaseModelContainer):
             "cached_tokens": cached_tokens,
             "finish_reason": finish_reason,
             "stop_str": stop_str,
+            "full_text": full_text,
         }
 
         return finish_chunk
@@ -945,6 +947,7 @@ class ExllamaV3Container(BaseModelContainer):
                     #     gen_settings.token_repetition_range = generated_tokens
 
                     generation = {
+                        "request_id": request_id,
                         "text": chunk,
                         "prompt_tokens": context_len,
                         "generated_tokens": generated_tokens,
@@ -953,7 +956,9 @@ class ExllamaV3Container(BaseModelContainer):
                     yield generation
 
                 if result.get("eos"):
-                    finish_chunk = self.handle_finish_chunk(result, generation)
+                    finish_chunk = self.handle_finish_chunk(
+                        result, request_id, full_response
+                    )
 
                     # Save the final result for metrics logging
                     metrics_result = finish_chunk
