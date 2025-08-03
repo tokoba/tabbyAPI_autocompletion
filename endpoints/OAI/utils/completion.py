@@ -210,6 +210,17 @@ async def stream_generate_completion(
     await inference_request_manager.add_request(session_id, abort_event)
     logger.info(f"Session {session_id}: Registered new request {request.state.id}.")
 
+    def make_cleanup_callback(sid, event, req_id):
+        def callback(task):
+            async def cleanup():
+                was_removed = await inference_request_manager.remove_request(sid, event)
+                if was_removed:
+                    logger.info(f"Session {sid}: Cleaned up request {req_id}.")
+
+            asyncio.create_task(cleanup())
+
+        return callback
+
     try:
         logger.info(f"Received streaming completion request {request.state.id}")
 
@@ -228,6 +239,10 @@ async def stream_generate_completion(
                 )
             )
 
+            cleanup_cb = make_cleanup_callback(
+                session_id, abort_event, request.state.id
+            )
+            gen_task.add_done_callback(cleanup_cb)
             gen_tasks.append(gen_task)
 
         # Consumer loop
@@ -239,7 +254,9 @@ async def stream_generate_completion(
                 )
 
             if abort_event.is_set():
-                logger.info(f"Session {session_id}: Aborting request {request.state.id} due to new request.")
+                logger.info(
+                    f"Session {session_id}: Aborting request {request.state.id} due to new request."
+                )
                 # Drain the queue of any remaining items from the aborted task
                 while not gen_queue.empty():
                     gen_queue.get_nowait()
@@ -271,9 +288,11 @@ async def stream_generate_completion(
             f"Completion {request.state.id} aborted. Please check the server console."
         )
     finally:
-        # Clean up the request from the manager
-        await inference_request_manager.remove_request(session_id, abort_event)
-        logger.info(f"Session {session_id}: Cleaned up request {request.state.id}.")
+        # The cleanup is now handled by the done callback.
+        # This finally block is kept to ensure disconnect is handled,
+        # but no direct cleanup action is needed here.
+        if disconnect_task.done() and not abort_event.is_set():
+            abort_event.set()
 
 
 async def generate_completion(

@@ -51,14 +51,19 @@ class InferenceRequestManager:
             # Store the new request's event
             self._requests[session_id] = abort_event
 
-    async def remove_request(self, session_id: str, abort_event: asyncio.Event):
+    async def remove_request(self, session_id: str, abort_event: asyncio.Event) -> bool:
         """
         Removes a request from the manager, only if the event matches.
         This prevents a cancelled request from removing a new, valid request.
+
+        Returns:
+            bool: True if a request was removed, False otherwise.
         """
         async with self._lock:
             if session_id in self._requests and self._requests[session_id] is abort_event:
                 del self._requests[session_id]
+                return True
+        return False
 
 
 # Global instance of the InferenceRequestManager
